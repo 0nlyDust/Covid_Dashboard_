@@ -1,6 +1,6 @@
 import pandas as pd
-import plotly.express as px
 import plotly.graph_objects as go
+import plotly.express as px
 from sklearn.linear_model import LinearRegression
 from sklearn.model_selection import train_test_split
 from dash import Dash, dcc, html
@@ -53,72 +53,131 @@ app.layout = html.Div([
                             min=0,
                             max=df_pais_total['Fecha'].nunique()-1,
                             value=[0, df_pais_total['Fecha'].nunique()-1],
-                            marks={i:str(date.date()) for i,date in enumerate(sorted(df_pais_total['Fecha'].unique()))},
+                            marks={i:f"Día {i+1}" for i in range(df_pais_total['Fecha'].nunique())},
                             step=1)
+        ], style={'width':'48%', 'display':'inline-block', 'padding-left':'20px'}),
+        
+        html.Div([
+            html.Label("Escala logarítmica:"),
+            dcc.Checklist(id='log-scale',
+                          options=[{'label': 'Usar escala logarítmica', 'value': 'log'}],
+                          value=[],
+                          style={'padding-top': '10px'})
         ], style={'width':'48%', 'display':'inline-block', 'padding-left':'20px'})
     ], style={'margin-bottom':'30px'}),
 
     # Gráficas
     html.Div([
-        dcc.Graph(id='grafico-casos'),
+        dcc.Graph(id='grafico-casos-diarios'),
+        dcc.Graph(id='grafico-acumulados'),
+        dcc.Graph(id='grafico-fallecimientos-diarios'),
         dcc.Graph(id='heatmap-correlacion'),
         dcc.Graph(id='grafico-prediccion')
     ])
 ])
 
 @app.callback(
-    [Output('grafico-casos','figure'),
-     Output('heatmap-correlacion','figure'),
-     Output('grafico-prediccion','figure')],
-    [Input('dropdown-pais','value'),
-     Input('slider-fechas','value')]
+    [Output('grafico-casos-diarios', 'figure'),
+     Output('grafico-acumulados', 'figure'),
+     Output('grafico-fallecimientos-diarios', 'figure'),
+     Output('heatmap-correlacion', 'figure'),
+     Output('grafico-prediccion', 'figure')],
+    [Input('dropdown-pais', 'value'),
+     Input('slider-fechas', 'value'),
+     Input('log-scale', 'value')]
 )
-def actualizar_dashboard(pais_seleccionado, rango_fechas):
-    df_sel = df_pais_total[df_pais_total['Country/Region']==pais_seleccionado].sort_values('Fecha').reset_index(drop=True)
-    df_sel = df_sel.iloc[rango_fechas[0]:rango_fechas[1]+1].copy()
+def actualizar_dashboard(pais_seleccionado, rango_fechas, log_scale):
+    df_sel = df_pais_total[df_pais_total['Country/Region'] == pais_seleccionado].sort_values('Fecha').reset_index(drop=True)
+    df_sel = df_sel.iloc[rango_fechas[0]:rango_fechas[1] + 1].copy()
 
+    # Calcular casos y fallecimientos diarios
     df_sel['Casos_diarios'] = df_sel['Casos_acumulados'].diff().fillna(df_sel['Casos_acumulados'])
     df_sel['Fallecimientos_diarios'] = df_sel['Fallecimientos'].diff().fillna(df_sel['Fallecimientos'])
     df_sel['Recuperaciones_diarias'] = df_sel['Recuperaciones'].diff().fillna(df_sel['Recuperaciones'])
 
-    # Verificación de valores NaN
-    print(df_sel[['Fecha', 'Fallecimientos', 'Fallecimientos_diarios']].isna().sum())
+    # Corregir valores negativos
+    df_sel['Fallecimientos_diarios'] = df_sel['Fallecimientos_diarios'].apply(lambda x: max(0, x))
 
-    # Gráfico evolución
+    # Media móvil de 7 días
+    df_sel['Casos_diarios_movil'] = df_sel['Casos_diarios'].rolling(window=7).mean()
+    df_sel['Fallecimientos_diarios_movil'] = df_sel['Fallecimientos_diarios'].rolling(window=7).mean()
+
+    # Configurar escala logarítmica
+    scale = 'log' if 'log' in log_scale else 'linear'
+
+    # Gráfico de casos diarios
     fig_casos = go.Figure()
-
-    fig_casos.add_trace(go.Scatter(x=df_sel['Fecha'], y=df_sel['Casos_diarios'], mode='lines+markers', name='Casos diarios'))
-    fig_casos.add_trace(go.Scatter(x=df_sel['Fecha'], y=df_sel['Casos_acumulados'], mode='lines+markers', name='Casos acumulados'))
-    fig_casos.add_trace(go.Scatter(x=df_sel['Fecha'], y=df_sel['Fallecimientos_diarios'], mode='lines+markers', name='Fallecimientos diarios', yaxis="y2"))
-    fig_casos.add_trace(go.Scatter(x=df_sel['Fecha'], y=df_sel['Recuperaciones_diarias'], mode='lines+markers', name='Recuperaciones diarias'))
-
+    fig_casos.add_trace(go.Bar(x=df_sel['Fecha'], y=df_sel['Casos_diarios'], name='Casos diarios', marker_color='royalblue'))
+    fig_casos.add_trace(go.Scatter(x=df_sel['Fecha'], y=df_sel['Casos_diarios_movil'], name='Media móvil 7 días', mode='lines', line=dict(color='red')))
     fig_casos.update_layout(
-        title=f"Evolución COVID-19 en {pais_seleccionado}",
+        title=f"Casos Diarios de COVID-19 en {pais_seleccionado}",
         xaxis_title="Fecha",
-        yaxis_title="Número de casos",
-        yaxis2=dict(title="Fallecimientos diarios", overlaying="y", side="right")
+        yaxis_title="Casos diarios",
+        xaxis=dict(tickformat="%d-%m-%Y"),
+        yaxis=dict(type=scale),
+        template="plotly_dark"
     )
 
-    # Heatmap correlación
-    corr = df_sel[['Casos_diarios','Fallecimientos_diarios','Recuperaciones_diarias']].corr()
-    fig_corr = px.imshow(corr, text_auto=True, color_continuous_scale='RdBu_r', title=f"Correlaciones COVID-19 en {pais_seleccionado}")
+    # Gráfico de casos acumulados
+    fig_acumulados = go.Figure()
+    fig_acumulados.add_trace(go.Scatter(x=df_sel['Fecha'], y=df_sel['Casos_acumulados'], mode='lines', name='Casos acumulados', line=dict(color='green')))
+    fig_acumulados.update_layout(
+        title=f"Casos Acumulados de COVID-19 en {pais_seleccionado}",
+        xaxis_title="Fecha",
+        yaxis_title="Casos acumulados",
+        xaxis=dict(tickformat="%d-%m-%Y"),
+        yaxis=dict(type=scale),
+        template="plotly_dark"
+    )
 
-    # Predicción
+    # Gráfico de fallecimientos diarios
+    fig_fallecimientos = go.Figure()
+    fig_fallecimientos.add_trace(go.Bar(x=df_sel['Fecha'], y=df_sel['Fallecimientos_diarios'], name='Fallecimientos diarios', marker_color='darkred'))
+    fig_fallecimientos.add_trace(go.Scatter(x=df_sel['Fecha'], y=df_sel['Fallecimientos_diarios_movil'], name='Media móvil 7 días', mode='lines', line=dict(color='orange')))
+    fig_fallecimientos.update_layout(
+        title=f"Fallecimientos Diarios por COVID-19 en {pais_seleccionado}",
+        xaxis_title="Fecha",
+        yaxis_title="Fallecimientos diarios",
+        xaxis=dict(tickformat="%d-%m-%Y"),
+        yaxis=dict(type=scale),
+        template="plotly_dark"
+    )
+
+    # Heatmap de correlaciones
+    corr = df_sel[['Casos_diarios', 'Fallecimientos_diarios', 'Recuperaciones_diarias']].corr()
+    fig_corr = px.imshow(corr, text_auto=True, color_continuous_scale='RdBu_r', title=f"Correlaciones COVID-19 en {pais_seleccionado}")
+    fig_corr.update_layout(
+        template="plotly_dark"
+    )
+
+    # Predicción de casos con regresión lineal para todo el conjunto de datos
     df_sel['Fecha_ordinal'] = df_sel['Fecha'].map(pd.Timestamp.toordinal)
     X = df_sel[['Fecha_ordinal']]
     y = df_sel['Casos_diarios']
-    X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, shuffle=False)
+    
+    # Modelo de regresión lineal
     model = LinearRegression()
-    model.fit(X_train, y_train)
-    y_pred = model.predict(X_test)
+    model.fit(X, y)
+    
+    # Predicción para todo el conjunto de fechas
+    y_pred = model.predict(X)
+    
+    # Suavizado con media móvil
+    y_pred_smooth = pd.Series(y_pred).rolling(window=7).mean()
 
     fig_pred = go.Figure()
-    fig_pred.add_trace(go.Scatter(x=df_sel['Fecha'], y=df_sel['Casos_diarios'], mode='lines+markers', name='Casos reales'))
-    fig_pred.add_trace(go.Scatter(x=df_sel['Fecha'].iloc[X_train.shape[0]:], y=y_pred, mode='lines+markers', name='Predicción'))
-    fig_pred.update_layout(title=f"Predicción de casos diarios en {pais_seleccionado}", xaxis_title="Fecha", yaxis_title="Casos diarios")
+    fig_pred.add_trace(go.Scatter(x=df_sel['Fecha'], y=df_sel['Casos_diarios'], mode='lines', name='Casos reales', line=dict(color='blue')))
+    fig_pred.add_trace(go.Scatter(x=df_sel['Fecha'], y=y_pred_smooth, mode='lines', name='Predicción suavizada', line=dict(color='orange')))
+    fig_pred.update_layout(
+        title=f"Predicción de Casos Diarios en {pais_seleccionado}",
+        xaxis_title="Fecha",
+        yaxis_title="Casos diarios",
+        xaxis=dict(tickformat="%d-%m-%Y"),
+        yaxis=dict(type=scale),
+        template="plotly_dark"
+    )
 
-    return fig_casos, fig_corr, fig_pred
+    return fig_casos, fig_acumulados, fig_fallecimientos, fig_corr, fig_pred
 
 if __name__ == '__main__':
-
     app.run(debug=True)
