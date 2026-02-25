@@ -34,7 +34,7 @@ app = Dash(__name__)
 paises = df_pais_total['Country/Region'].unique()
 
 app.layout = html.Div([
-    html.H1("Dashboard COVID-19 Interactivo", style={'text-align':'center', 'margin-bottom':'20px'}),
+    html.H1("Dashboard COVID-19", style={'text-align':'center', 'margin-bottom':'20px'}),
 
     # Controles arriba
     html.Div([
@@ -120,4 +120,5 @@ def actualizar_dashboard(pais_seleccionado, rango_fechas):
     return fig_casos, fig_corr, fig_pred
 
 if __name__ == '__main__':
+
     app.run(debug=True)
